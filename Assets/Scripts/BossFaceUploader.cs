@@ -1,3 +1,4 @@
+using System.Collections;
 using System.IO;
 using SFB;
 using UnityEngine;
@@ -5,6 +6,11 @@ using UnityEngine;
 public class BossFaceUploader : MonoBehaviour {
     [Header("Boss Face")]
     [SerializeField] private Renderer faceRenderer;
+
+    [Header("Image Editor")]
+    [SerializeField] private ImageEditor imageEditor;
+    [SerializeField] private GameObject imageEditorPanel;
+
 
     private Texture2D currentFaceTexture;
 
@@ -66,11 +72,51 @@ public class BossFaceUploader : MonoBehaviour {
 
         currentFaceTexture = texture;
 
-        faceRenderer.material.mainTexture = texture;
+        imageEditor.SetImage(texture);
 
-        Debug.Log("Boss face updated successfully!");
+        imageEditorPanel.SetActive(true);
     }
 
+    public void ApplyImage() {
+        Texture2D editedTexture = imageEditor.GenerateFinalTexture();
 
+        if (editedTexture == null) {
+            Debug.LogError("Could not generate edited texture.");
+            return;
+        }
+
+        if (currentFaceTexture != null) {
+            Destroy(currentFaceTexture);
+        }
+
+        currentFaceTexture = editedTexture;
+
+        faceRenderer.material.mainTexture = editedTexture;
+
+        imageEditorPanel.SetActive(false);
+
+        Debug.Log("Edited face successfully applied!");
+    }
+
+    private IEnumerator ApplyImageRoutine() {
+        yield return new WaitForEndOfFrame();
+
+        Texture2D editedTexture = imageEditor.GenerateFinalTexture();
+
+        if (editedTexture == null) {
+            Debug.LogError("Failed to capture edited image");
+            yield break;
+        }
+
+        if (currentFaceTexture != null) {
+            Destroy(currentFaceTexture);
+        }
+
+        currentFaceTexture = editedTexture;
+
+        faceRenderer.material.mainTexture = editedTexture;
+        imageEditorPanel.SetActive(false);
+        Debug.Log("Eddited face successfully applied");
+    }
 
 }
