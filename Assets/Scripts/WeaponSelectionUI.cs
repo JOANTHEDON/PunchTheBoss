@@ -22,7 +22,14 @@ public class WeaponSelectionUI : MonoBehaviour {
     [SerializeField] private GameObject uploadBtn;
 
     private void Start() {
+        if (weaponPanel == null) {
+            Canvas mainCanvas = FindFirstObjectByType<Canvas>();
+            if (mainCanvas != null) {
+                BuildRuntimeUI(mainCanvas.transform);
+            }
+        }
         SetupButtons();
+        ShowWeaponPanel(false); // Initially hidden; activated when editing is done
     }
 
     private void SetupButtons() {
@@ -85,7 +92,7 @@ public class WeaponSelectionUI : MonoBehaviour {
         chappalBtn = CreateWeaponButton(panelObj.transform, "🩴\nChappal", () => Select(WeaponType.Chappal), new Color(0.6f, 0.85f, 1f));
         superBtn = CreateWeaponButton(panelObj.transform, "💥\nSUPER", () => Select(WeaponType.Super), new Color(1f, 0.3f, 0.8f));
 
-        weaponPanel.SetActive(false); // Initially hidden until image applied
+        weaponPanel.SetActive(false); // Initially hidden until image editing is complete
     }
 
     private Button CreateWeaponButton(Transform parent, string title, UnityEngine.Events.UnityAction action, Color bgColor) {

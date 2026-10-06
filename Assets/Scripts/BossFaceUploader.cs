@@ -133,11 +133,22 @@ public class BossFaceUploader : MonoBehaviour {
             imageEditorPanel.SetActive(false);
         }
 
-        // Activate the 5 weapon buttons for gameplay
-        if (weaponSelectionUI != null) {
-            weaponSelectionUI.ShowWeaponPanel(true);
+        // Open Voice Reaction menu right after image editing completes
+        BossVoiceManager voiceManager = BossVoiceManager.Instance;
+        if (voiceManager == null) {
+            voiceManager = FindFirstObjectByType<BossVoiceManager>();
+            if (voiceManager == null) {
+                GameObject vmObj = new GameObject("BossVoiceManager", typeof(BossVoiceManager));
+                voiceManager = vmObj.GetComponent<BossVoiceManager>();
+            }
         }
 
-        Debug.Log("[BossFaceUploader] Weapons unlocked: Glove, Slap, Coffee, Chappal, Super!");
+        voiceManager.OpenVoiceMenu(() => {
+            // Activate the 5 weapon buttons for gameplay after voice menu is closed
+            if (weaponSelectionUI != null) {
+                weaponSelectionUI.ShowWeaponPanel(true);
+            }
+            Debug.Log("[BossFaceUploader] Voice setup complete! Weapons unlocked: Glove, Slap, Coffee, Chappal, Super!");
+        });
     }
 }

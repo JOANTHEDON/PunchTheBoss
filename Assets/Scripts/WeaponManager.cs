@@ -17,7 +17,8 @@ public enum WeaponType {
 
 /// <summary>
 /// Handles selecting weapons, following mouse pointer / appearing,
-/// clicking on the boss to hit, triggering animations / hit reactions / audio / effects.
+/// clicking on the boss to hit, triggering animations / hit reactions / audio / effects,
+/// and delegating localized progressive facial redness / bruising.
 /// </summary>
 public class WeaponManager : MonoBehaviour {
 
@@ -39,6 +40,7 @@ public class WeaponManager : MonoBehaviour {
     [SerializeField] private Canvas canvas;
 
     private BossRagdollHead bossRagdoll;
+    private BossFaceDamage bossFaceDamage;
 
     // Events
     public event Action<WeaponType> OnWeaponChanged;
@@ -158,8 +160,21 @@ public class WeaponManager : MonoBehaviour {
             }
         }
 
-        // 2. Spawn punch/hit visual impact effect
+        // 2. Register localized progressive face damage & redness (eyes, mouth, nose, forehead)
+        if (bossFaceDamage == null) {
+            bossFaceDamage = FindFirstObjectByType<BossFaceDamage>();
+        }
+        if (bossFaceDamage != null) {
+            bossFaceDamage.RegisterDamageAtPoint(hitPoint, currentWeapon);
+        }
+
+        // 3. Spawn punch/hit visual impact effect
         SpawnImpactEffect(currentWeapon, hitPoint, hitNormal);
+
+        // 4. Play boss hit voice reaction clip with pitch modulation
+        if (BossVoiceManager.Instance != null) {
+            BossVoiceManager.Instance.PlayHitReactionVoice(currentWeapon);
+        }
 
         OnBossHit?.Invoke(currentWeapon, hitPoint);
     }
@@ -237,6 +252,13 @@ public class WeaponManager : MonoBehaviour {
                     bossRagdoll = bossObj.AddComponent<BossRagdollHead>();
                 }
             }
+
+            if (bossFaceDamage == null) {
+                bossFaceDamage = bossObj.GetComponentInChildren<BossFaceDamage>();
+                if (bossFaceDamage == null) {
+                    bossFaceDamage = bossObj.AddComponent<BossFaceDamage>();
+                }
+            }
         }
 
         if (bossHeadTransform == null) {
@@ -266,6 +288,10 @@ public class WeaponManager : MonoBehaviour {
 
             if (bossObj.GetComponent<BossHitReceiver>() == null) {
                 bossObj.AddComponent<BossHitReceiver>();
+            }
+
+            if (bossObj.GetComponent<BossFaceDamage>() == null) {
+                bossFaceDamage = bossObj.AddComponent<BossFaceDamage>();
             }
         }
 
