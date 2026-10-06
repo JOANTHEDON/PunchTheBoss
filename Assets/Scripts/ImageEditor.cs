@@ -1,235 +1,327 @@
+using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
+/// <summary>
+/// Controls the image editing panel:
+/// - Drag image to reposition
+/// - Scroll to zoom in / out
+/// - Rotate 90 degrees left / right
+/// - Interactive Crop Frame resizing/dragging handles
+/// - Accurate screen-space capture on Apply without UI artifacts
+/// </summary>
 public class ImageEditor : MonoBehaviour, IPointerDownHandler, IDragHandler, IScrollHandler {
-    [Header("UI")]
+
+    [Header("UI References")]
     [SerializeField] private RawImage uploadedImage;
     [SerializeField] private RectTransform imageArea;
     [SerializeField] private RectTransform cropFrame;
 
-    [Header("Capture")]
-    [SerializeField] private RawImage captureImage;
-    [SerializeField] private RenderTexture captureRenderTexture;
-    [SerializeField] private Camera captureCamera;
-
-    [Header("Settings")]
+    [Header("Zoom Settings")]
     [SerializeField] private float zoomSpeed = 0.1f;
-    [SerializeField] private float minZoom = 0.5f;
-    [SerializeField] private float maxZoom = 3f;
+    [SerializeField] private float minZoom = 0.2f;
+    [SerializeField] private float maxZoom = 5f;
 
-
+    [Header("Crop Frame Constraints")]
+    [SerializeField] private float minCropSize = 100f;
 
     private RectTransform imageRect;
-
     private float currentZoom = 1f;
     private float currentRotation = 0f;
 
-    private void Awake() {
-        imageRect = uploadedImage.rectTransform;
+    // Interactive crop resize & drag state
+    public enum CropDragMode {
+        None,
+        MoveCrop,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+        EdgeLeft,
+        EdgeRight,
+        EdgeTop,
+        EdgeBottom
     }
 
-    public void SetImage(Texture2D texture) {
-        uploadedImage.texture = texture;
+    private CropDragMode activeCropMode = CropDragMode.None;
+    private const float CORNER_HIT_RADIUS = 30f;
+    private const float EDGE_HIT_THICKNESS = 20f;
 
+    private void Awake() {
+        if (uploadedImage != null) {
+            imageRect = uploadedImage.rectTransform;
+        }
+    }
+
+    // ===============================================================
+    // INITIALIZATION / SETUP
+    // ===============================================================
+
+    public void SetImage(Texture2D texture) {
+        if (uploadedImage == null) return;
+
+        uploadedImage.texture = texture;
         ResetImage();
         FitImage(texture);
+        ResetCropFrameToDefault();
     }
 
     private void FitImage(Texture2D texture) {
-        float areaWidth = imageArea.rect.width;
-        float areaHeight = imageArea.rect.height;
+        Canvas.ForceUpdateCanvases();
 
-        float imageWidth = texture.width;
-        float imageHeight = texture.height;
+        float areaWidth = imageArea.rect.width > 0 ? imageArea.rect.width : 700f;
+        float areaHeight = imageArea.rect.height > 0 ? imageArea.rect.height : 500f;
 
-        float scaleX = areaWidth / imageWidth;
-        float scaleY = areaHeight / imageHeight;
+        float imgWidth = texture.width > 0 ? texture.width : 500f;
+        float imgHeight = texture.height > 0 ? texture.height : 500f;
 
-        // Cover the complete editor area
-        float scale = Mathf.Max(scaleX, scaleY);
+        // Fit image so it is fully visible or cleanly covering the editor area
+        float scaleX = areaWidth / imgWidth;
+        float scaleY = areaHeight / imgHeight;
+        float scale = Mathf.Min(scaleX, scaleY);
 
-        imageRect.sizeDelta = new Vector2(
-            imageWidth * scale,
-            imageHeight * scale
-        );
+        imageRect.sizeDelta = new Vector2(imgWidth * scale, imgHeight * scale);
+        imageRect.anchoredPosition = Vector2.zero;
     }
 
-    // =========================
-    // DRAG
-    // =========================
+    public void ResetCropFrameToDefault() {
+        if (cropFrame == null) return;
+
+        float areaWidth = imageArea.rect.width > 0 ? imageArea.rect.width : 700f;
+        float areaHeight = imageArea.rect.height > 0 ? imageArea.rect.height : 500f;
+
+        // Set default crop frame to a square centered in image area
+        float defaultSize = Mathf.Min(areaWidth, areaHeight) * 0.75f;
+        cropFrame.anchoredPosition = Vector2.zero;
+        cropFrame.sizeDelta = new Vector2(defaultSize, defaultSize);
+    }
+
+    // ===============================================================
+    // MOUSE POINTER / DRAG / RESIZE LOGIC
+    // ===============================================================
 
     public void OnPointerDown(PointerEventData eventData) {
-        Debug.Log("Image editor pointer down");
+        activeCropMode = DetermineCropDragMode(eventData.position);
     }
 
     public void OnDrag(PointerEventData eventData) {
-        imageRect.anchoredPosition += eventData.delta;
+        if (cropFrame == null || activeCropMode == CropDragMode.None) {
+            // Drag the image if not interacting with crop frame handles
+            if (imageRect != null) {
+                imageRect.anchoredPosition += eventData.delta;
+            }
+            return;
+        }
+
+        HandleCropResizeOrMove(eventData);
     }
 
-    // =========================
-    // ZOOM
-    // =========================
+    private CropDragMode DetermineCropDragMode(Vector2 screenPoint) {
+        if (cropFrame == null) return CropDragMode.None;
+
+        Canvas canvas = GetComponentInParent<Canvas>();
+        Camera cam = (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) ? canvas.worldCamera : null;
+
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(cropFrame, screenPoint, cam, out Vector2 localPoint)) {
+            return CropDragMode.None;
+        }
+
+        Vector2 size = cropFrame.rect.size;
+        float halfW = size.x * 0.5f;
+        float halfH = size.y * 0.5f;
+
+        // Corners
+        bool nearLeft = Mathf.Abs(localPoint.x - (-halfW)) <= CORNER_HIT_RADIUS;
+        bool nearRight = Mathf.Abs(localPoint.x - halfW) <= CORNER_HIT_RADIUS;
+        bool nearBottom = Mathf.Abs(localPoint.y - (-halfH)) <= CORNER_HIT_RADIUS;
+        bool nearTop = Mathf.Abs(localPoint.y - halfH) <= CORNER_HIT_RADIUS;
+
+        if (nearLeft && nearTop) return CropDragMode.TopLeft;
+        if (nearRight && nearTop) return CropDragMode.TopRight;
+        if (nearLeft && nearBottom) return CropDragMode.BottomLeft;
+        if (nearRight && nearBottom) return CropDragMode.BottomRight;
+
+        // Edges
+        if (nearLeft && Mathf.Abs(localPoint.y) <= halfH) return CropDragMode.EdgeLeft;
+        if (nearRight && Mathf.Abs(localPoint.y) <= halfH) return CropDragMode.EdgeRight;
+        if (nearTop && Mathf.Abs(localPoint.x) <= halfW) return CropDragMode.EdgeTop;
+        if (nearBottom && Mathf.Abs(localPoint.x) <= halfW) return CropDragMode.EdgeBottom;
+
+        // Inside crop frame -> drag the whole crop box
+        if (Mathf.Abs(localPoint.x) <= halfW && Mathf.Abs(localPoint.y) <= halfH) {
+            return CropDragMode.MoveCrop;
+        }
+
+        return CropDragMode.None;
+    }
+
+    private void HandleCropResizeOrMove(PointerEventData eventData) {
+        Canvas canvas = GetComponentInParent<Canvas>();
+        float scaleFactor = canvas != null ? canvas.scaleFactor : 1f;
+        Vector2 delta = eventData.delta / (scaleFactor > 0 ? scaleFactor : 1f);
+
+        Vector2 size = cropFrame.sizeDelta;
+        Vector2 pos = cropFrame.anchoredPosition;
+
+        float maxW = imageArea.rect.width > 0 ? imageArea.rect.width : 1000f;
+        float maxH = imageArea.rect.height > 0 ? imageArea.rect.height : 1000f;
+
+        switch (activeCropMode) {
+            case CropDragMode.MoveCrop:
+                pos += delta;
+                break;
+
+            case CropDragMode.TopRight:
+                size.x += delta.x;
+                size.y += delta.y;
+                pos.x += delta.x * 0.5f;
+                pos.y += delta.y * 0.5f;
+                break;
+
+            case CropDragMode.TopLeft:
+                size.x -= delta.x;
+                size.y += delta.y;
+                pos.x += delta.x * 0.5f;
+                pos.y += delta.y * 0.5f;
+                break;
+
+            case CropDragMode.BottomRight:
+                size.x += delta.x;
+                size.y -= delta.y;
+                pos.x += delta.x * 0.5f;
+                pos.y += delta.y * 0.5f;
+                break;
+
+            case CropDragMode.BottomLeft:
+                size.x -= delta.x;
+                size.y -= delta.y;
+                pos.x += delta.x * 0.5f;
+                pos.y += delta.y * 0.5f;
+                break;
+
+            case CropDragMode.EdgeRight:
+                size.x += delta.x;
+                pos.x += delta.x * 0.5f;
+                break;
+
+            case CropDragMode.EdgeLeft:
+                size.x -= delta.x;
+                pos.x += delta.x * 0.5f;
+                break;
+
+            case CropDragMode.EdgeTop:
+                size.y += delta.y;
+                pos.y += delta.y * 0.5f;
+                break;
+
+            case CropDragMode.EdgeBottom:
+                size.y -= delta.y;
+                pos.y += delta.y * 0.5f;
+                break;
+        }
+
+        // Clamp sizes
+        size.x = Mathf.Clamp(size.x, minCropSize, maxW);
+        size.y = Mathf.Clamp(size.y, minCropSize, maxH);
+
+        // Clamp position within imageArea
+        float limitX = (maxW - size.x) * 0.5f;
+        float limitY = (maxH - size.y) * 0.5f;
+        pos.x = Mathf.Clamp(pos.x, -limitX, limitX);
+        pos.y = Mathf.Clamp(pos.y, -limitY, limitY);
+
+        cropFrame.sizeDelta = size;
+        cropFrame.anchoredPosition = pos;
+    }
+
+    // ===============================================================
+    // ZOOM & ROTATE CONTROLS
+    // ===============================================================
 
     public void OnScroll(PointerEventData eventData) {
-        float amount =
-            eventData.scrollDelta.y * zoomSpeed;
-
-        currentZoom += amount;
-
-        currentZoom = Mathf.Clamp(
-            currentZoom,
-            minZoom,
-            maxZoom
-        );
-
-        imageRect.localScale =
-            Vector3.one * currentZoom;
+        currentZoom += eventData.scrollDelta.y * zoomSpeed;
+        currentZoom = Mathf.Clamp(currentZoom, minZoom, maxZoom);
+        if (imageRect != null) {
+            imageRect.localScale = Vector3.one * currentZoom;
+        }
     }
 
-    // =========================
-    // ROTATION
-    // =========================
-
     public void RotateLeft() {
-        currentRotation -= 90f;
-
-        imageRect.localRotation =
-            Quaternion.Euler(
-                0f,
-                0f,
-                currentRotation
-            );
-
-        Debug.Log(
-            "Rotation: " + currentRotation
-        );
+        currentRotation += 90f;
+        if (imageRect != null) {
+            imageRect.localRotation = Quaternion.Euler(0f, 0f, currentRotation);
+        }
     }
 
     public void RotateRight() {
-        currentRotation += 90f;
-
-        imageRect.localRotation =
-            Quaternion.Euler(
-                0f,
-                0f,
-                currentRotation
-            );
-
-        Debug.Log(
-            "Rotation: " + currentRotation
-        );
+        currentRotation -= 90f;
+        if (imageRect != null) {
+            imageRect.localRotation = Quaternion.Euler(0f, 0f, currentRotation);
+        }
     }
-
-    // =========================
-    // RESET
-    // =========================
 
     public void ResetImage() {
         currentZoom = 1f;
         currentRotation = 0f;
 
-        imageRect.anchoredPosition =
-            Vector2.zero;
+        if (imageRect != null) {
+            imageRect.anchoredPosition = Vector2.zero;
+            imageRect.localScale = Vector3.one;
+            imageRect.localRotation = Quaternion.identity;
+        }
 
-        imageRect.localScale =
-            Vector3.one;
-
-        imageRect.localRotation =
-            Quaternion.identity;
+        ResetCropFrameToDefault();
     }
 
-    // =========================
-    // CREATE FINAL TEXTURE
-    // =========================
+    // ===============================================================
+    // CAPTURE / CROP TO FINAL TEXTURE
+    // ===============================================================
 
-    public Texture2D GenerateFinalTexture() {
-        Canvas.ForceUpdateCanvases();
+    /// <summary>
+    /// Captures the cropped region defined by the cropFrame overlay without artifacts.
+    /// </summary>
+    public void RequestFinalTexture(Action<Texture2D> onDone) {
+        StartCoroutine(CaptureRoutine(onDone));
+    }
 
-        bool cropWasActive = cropFrame.gameObject.activeSelf;
-        cropFrame.gameObject.SetActive(false);
+    private IEnumerator CaptureRoutine(Action<Texture2D> onDone) {
+        // 1. Temporarily hide crop frame so the border isn't captured in the boss's face
+        bool cropWasActive = cropFrame != null && cropFrame.gameObject.activeSelf;
+        if (cropFrame != null) {
+            cropFrame.gameObject.SetActive(false);
+        }
 
+        // 2. Wait until rendering for the current frame is complete
+        yield return new WaitForEndOfFrame();
+
+        // 3. Compute screen bounds of crop frame
         Vector3[] corners = new Vector3[4];
         cropFrame.GetWorldCorners(corners);
 
-        Canvas canvas = imageArea.GetComponentInParent<Canvas>();
-
-        Camera cam = null;
-
-        if (canvas.renderMode != RenderMode.ScreenSpaceOverlay) {
-            cam = canvas.worldCamera;
-        }
+        Canvas canvas = GetComponentInParent<Canvas>();
+        Camera cam = (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) ? canvas.worldCamera : null;
 
         Vector2 bottomLeft = RectTransformUtility.WorldToScreenPoint(cam, corners[0]);
-
         Vector2 topRight = RectTransformUtility.WorldToScreenPoint(cam, corners[2]);
 
+        float x = Mathf.Clamp(bottomLeft.x, 0, Screen.width - 1);
+        float y = Mathf.Clamp(bottomLeft.y, 0, Screen.height - 1);
+        float width = Mathf.Clamp(topRight.x - bottomLeft.x, 1, Screen.width - x);
+        float height = Mathf.Clamp(topRight.y - bottomLeft.y, 1, Screen.height - y);
 
-        float x = bottomLeft.x;
-        float y = bottomLeft.y;
-
-        float width = topRight.x - bottomLeft.x;
-        float height = topRight.y - bottomLeft.y;
-
-        x = Mathf.Clamp(x, 0, Screen.width - 1);
-        y = Mathf.Clamp(y, 0, Screen.height - 1);
-
-        width = Mathf.Clamp(width, 0, Screen.width - x);
-
-        height = Mathf.Clamp(height, 1, Screen.height - y);
-
+        // 4. Capture the exact cropped pixels
         Texture2D result = new Texture2D(Mathf.RoundToInt(width), Mathf.RoundToInt(height), TextureFormat.RGBA32, false);
         result.ReadPixels(new Rect(x, y, width, height), 0, 0);
-
         result.Apply();
 
-        cropFrame.gameObject.SetActive(cropWasActive);
-
-        Debug.Log("Captured: " + result.width + " x " + result.height);
-
-        return result;
-
-    }
-
-    public void TestCaptureSetup() {
-        if (captureImage == null) {
-            Debug.LogError("Capture Image is not assigned!");
-            return;
+        // 5. Restore crop frame
+        if (cropFrame != null) {
+            cropFrame.gameObject.SetActive(cropWasActive);
         }
 
-        if (captureRenderTexture == null) {
-            Debug.LogError("Capture Render Texture is not assigned!");
-            return;
-        }
-
-        if (captureCamera == null) {
-            Debug.LogError("Capture Camera is not assigned!");
-            return;
-        }
-
-        // Use the same uploaded texture
-        captureImage.texture = uploadedImage.texture;
-
-        Debug.Log("Capture setup connected successfully!");
-    }
-
-    public void CopyEditorTransformToCapture() {
-        if (uploadedImage == null) {
-            Debug.LogError("UploadedImage is missing!");
-            return;
-        }
-
-        if (captureImage == null) {
-            Debug.Log("CaptureImage is missing");
-            return;
-        }
-
-        captureImage.texture = uploadedImage.texture;
-
-        captureImage.rectTransform.localRotation = uploadedImage.rectTransform.localRotation;
-        captureImage.rectTransform.localScale = uploadedImage.rectTransform.localScale;
-        captureImage.rectTransform.anchoredPosition = uploadedImage.rectTransform.anchoredPosition;
-
-        Debug.Log("Editor transform copied to capture image");
+        Debug.Log($"[ImageEditor] Cropped and captured texture: {result.width}x{result.height}");
+        onDone?.Invoke(result);
     }
 }
