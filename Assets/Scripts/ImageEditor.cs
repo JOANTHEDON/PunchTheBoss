@@ -60,7 +60,12 @@ public class ImageEditor : MonoBehaviour, IPointerDownHandler, IDragHandler, ISc
     // ===============================================================
 
     public void SetImage(Texture2D texture) {
+        if (uploadedImage == null) {
+            uploadedImage = GetComponentInChildren<RawImage>();
+        }
         if (uploadedImage == null) return;
+
+        imageRect = uploadedImage.rectTransform;
 
         uploadedImage.texture = texture;
         ResetImage();
@@ -71,8 +76,13 @@ public class ImageEditor : MonoBehaviour, IPointerDownHandler, IDragHandler, ISc
     private void FitImage(Texture2D texture) {
         Canvas.ForceUpdateCanvases();
 
-        float areaWidth = imageArea.rect.width > 0 ? imageArea.rect.width : 700f;
-        float areaHeight = imageArea.rect.height > 0 ? imageArea.rect.height : 500f;
+        if (imageRect == null && uploadedImage != null) {
+            imageRect = uploadedImage.rectTransform;
+        }
+        if (imageRect == null) return;
+
+        float areaWidth = (imageArea != null && imageArea.rect.width > 0) ? imageArea.rect.width : 700f;
+        float areaHeight = (imageArea != null && imageArea.rect.height > 0) ? imageArea.rect.height : 500f;
 
         float imgWidth = texture.width > 0 ? texture.width : 500f;
         float imgHeight = texture.height > 0 ? texture.height : 500f;

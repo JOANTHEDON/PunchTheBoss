@@ -1,154 +1,282 @@
 using System.IO;
 using SFB;
 using UnityEngine;
+using UnityEngine.UI;
 
+/// <summary>
+/// Controls the full UI onboarding flow:
+///   1. Upload Button  → click → Image Editor Panel opens
+///   2. Apply Button   → click → Boss Voice Menu Panel opens
+///   3. Start Button   → click → Weapon Action Panel opens (gameplay begins)
+/// </summary>
 public class BossFaceUploader : MonoBehaviour {
 
-    [Header("Boss Face — Sitting Idle Character")]
-    [Tooltip("The SkinnedMeshRenderer on the 'face' object of the Sitting Idle boss character.")]
+    // ── Inspector references ────────────────────────────────────────────────
+    [Header("Boss Face")]
     [SerializeField] private Renderer faceRenderer;
 
-    [Header("Image Editor")]
-    [SerializeField] private ImageEditor imageEditor;
-    [SerializeField] private GameObject  imageEditorPanel;
-
-    [Header("Attack / Weapon UI")]
-    [SerializeField] private WeaponSelectionUI weaponSelectionUI;
+    [Header("Step 1 – Upload")]
     [SerializeField] private GameObject uploadButton;
 
-    // Tracks the currently loaded / applied texture so we can destroy it when replaced
+    [Header("Step 2 – Image Editor")]
+    [SerializeField] private GameObject imageEditorPanel;
+    [SerializeField] private ImageEditor imageEditor;
+
+    [Header("Step 3 – Voice Menu")]
+    [SerializeField] private GameObject voiceMenuPanel;
+
+    [Header("Step 4 – Weapons")]
+    [SerializeField] private GameObject weaponActionPanel;
+    [SerializeField] private WeaponSelectionUI weaponSelectionUI;
+
+    // ── Private state ───────────────────────────────────────────────────────
     private Texture2D currentFaceTexture;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // LIFECYCLE
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void Awake() {
+        // Enforce correct initial states immediately — before any Start() fires
+        SetInitialState();
+    }
+
     private void Start() {
-        // Ensure WeaponManager exists in scene
-        if (FindFirstObjectByType<WeaponManager>() == null) {
-            GameObject wmObj = new GameObject("WeaponManager", typeof(WeaponManager));
+        // Auto-resolve any missing scene references
+        AutoResolveReferences();
+        // Wire button listeners
+        WireButtons();
+        // Re-enforce after resolution (in case something was null in Awake)
+        SetInitialState();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INITIAL STATE  —  Only Upload Button is visible
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void SetInitialState() {
+        SetActive(uploadButton,      true);
+        SetActive(imageEditorPanel,  false);
+        SetActive(voiceMenuPanel,    false);
+        SetActive(weaponActionPanel, false);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // AUTO-RESOLVE REFERENCES  (fallback if not wired in Inspector)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void AutoResolveReferences() {
+        // Face renderer
+        if (faceRenderer == null) {
+            GameObject faceGO = GameObject.Find("face");
+            if (faceGO != null) faceRenderer = faceGO.GetComponent<Renderer>();
+            if (faceRenderer == null) faceRenderer = FindFirstObjectByType<SkinnedMeshRenderer>();
         }
 
-        // If weaponSelectionUI isn't assigned, find or create it on the Canvas
-        if (weaponSelectionUI == null) {
-            weaponSelectionUI = FindFirstObjectByType<WeaponSelectionUI>();
-            if (weaponSelectionUI == null) {
-                Canvas mainCanvas = FindFirstObjectByType<Canvas>();
-                if (mainCanvas != null) {
-                    GameObject uiObj = new GameObject("WeaponUI", typeof(WeaponSelectionUI));
-                    uiObj.transform.SetParent(mainCanvas.transform, false);
-                    weaponSelectionUI = uiObj.GetComponent<WeaponSelectionUI>();
-                    weaponSelectionUI.BuildRuntimeUI(mainCanvas.transform);
-                }
+        // Upload button
+        if (uploadButton == null) {
+            Button[] all = FindObjectsByType<Button>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var b in all) {
+                string n = b.name.ToLower();
+                if (n.Contains("upload") || n.Contains("select")) { uploadButton = b.gameObject; break; }
             }
+        }
+
+        // Image editor
+        if (imageEditor == null)
+            imageEditor = FindFirstObjectByType<ImageEditor>(FindObjectsInactive.Include);
+        if (imageEditorPanel == null && imageEditor != null)
+            imageEditorPanel = imageEditor.gameObject;
+        if (imageEditorPanel == null)
+            imageEditorPanel = FindInactiveByName("ImageEditorPanel");
+
+        // Voice menu — search inactive objects (GameObject.Find misses inactive)
+        if (voiceMenuPanel == null)
+            voiceMenuPanel = FindInactiveByName("BossVoiceMenuPanel");
+
+        // Weapon panel
+        if (weaponActionPanel == null)
+            weaponActionPanel = FindInactiveByName("WeaponActionPanel");
+        if (weaponSelectionUI == null)
+            weaponSelectionUI = FindFirstObjectByType<WeaponSelectionUI>(FindObjectsInactive.Include);
+
+        // Ensure WeaponManager exists
+        if (WeaponManager.Instance == null)
+            new GameObject("WeaponManager", typeof(WeaponManager));
+
+        // Ensure BossVoiceManager exists as its own active scene object (NOT on the panel)
+        if (BossVoiceManager.Instance == null) {
+            GameObject vmHost = new GameObject("BossVoiceManager", typeof(BossVoiceManager));
+            // Give it the panel reference right away
+            vmHost.GetComponent<BossVoiceManager>().SetVoiceMenuPanel(voiceMenuPanel);
+        } else if (voiceMenuPanel != null) {
+            BossVoiceManager.Instance.SetVoiceMenuPanel(voiceMenuPanel);
         }
     }
 
-    // ===============================================================
-    // STEP 1 — Open file picker and load the image into the editor
-    // ===============================================================
+    // ═══════════════════════════════════════════════════════════════════════
+    // BUTTON WIRING
+    // ═══════════════════════════════════════════════════════════════════════
 
-    public void SelectFaceImage() {
-        var extensions = new[] {
-            new ExtensionFilter("Image Files", "png", "jpg", "jpeg")
-        };
+    private void WireButtons() {
+        // Upload button
+        if (uploadButton != null) {
+            Button btn = uploadButton.GetComponent<Button>();
+            if (btn != null) {
+                btn.onClick.RemoveListener(OnUploadClicked);
+                btn.onClick.AddListener(OnUploadClicked);
+            }
+        }
 
-        string[] paths = StandaloneFileBrowser.OpenFilePanel(
-            "Select Boss Face",
-            "",
-            extensions,
-            false
-        );
+        // Apply / Save button inside the image editor panel
+        if (imageEditorPanel != null) {
+            BindBtn(imageEditorPanel, new[] { "ApplyButton","ApplyBtn","Btn_Apply","Apply","Save" }, OnApplyClicked);
+            if (imageEditor != null) {
+                BindBtn(imageEditorPanel, new[] { "RotateLeftButton","RotateLeft","Btn_RotateLeft" },  imageEditor.RotateLeft);
+                BindBtn(imageEditorPanel, new[] { "RotateRightButton","RotateRight","Btn_RotateRight" }, imageEditor.RotateRight);
+                BindBtn(imageEditorPanel, new[] { "ResetButton","ResetBtn","Btn_Reset" },               imageEditor.ResetImage);
+            }
+        }
 
-        if (paths.Length == 0 || string.IsNullOrEmpty(paths[0])) {
+        // Voice menu buttons are wired by BossVoiceManager itself
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 1  —  Upload button clicked
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void OnUploadClicked() {
+        var extensions = new[] { new ExtensionFilter("Image Files", "png", "jpg", "jpeg") };
+        string[] paths = StandaloneFileBrowser.OpenFilePanel("Select Boss Face", "", extensions, false);
+
+        if (paths == null || paths.Length == 0 || string.IsNullOrEmpty(paths[0])) {
             Debug.Log("[BossFaceUploader] No image selected.");
             return;
         }
 
-        LoadFaceImage(paths[0]);
+        LoadAndShowEditor(paths[0]);
     }
 
-    private void LoadFaceImage(string path) {
+    private void LoadAndShowEditor(string path) {
         if (!File.Exists(path)) {
             Debug.LogError($"[BossFaceUploader] File not found: {path}");
             return;
         }
 
-        byte[] imageData = File.ReadAllBytes(path);
-        Texture2D texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-
-        if (!texture.LoadImage(imageData)) {
+        byte[] data = File.ReadAllBytes(path);
+        Texture2D tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        if (!tex.LoadImage(data)) {
             Debug.LogError("[BossFaceUploader] Failed to decode image.");
-            Destroy(texture);
+            Destroy(tex);
             return;
         }
+        tex.name = "UploadedBossFace";
 
-        texture.name = "UploadedBossFace";
+        // Transition: Upload → Editor
+        SetActive(uploadButton,      false);
+        SetActive(imageEditorPanel,  true);
+        SetActive(voiceMenuPanel,    false);
+        SetActive(weaponActionPanel, false);
 
-        // Hide upload button while editing
-        if (uploadButton != null) {
-            uploadButton.SetActive(false);
-        }
+        if (imageEditor != null)
+            imageEditor.SetImage(tex);
 
-        // Hand the texture to the editor and show the panel
-        if (imageEditor != null) {
-            imageEditor.SetImage(texture);
-        }
-
-        if (imageEditorPanel != null) {
-            imageEditorPanel.SetActive(true);
-        }
-
-        Debug.Log($"[BossFaceUploader] Image loaded: {path}");
+        Debug.Log($"[BossFaceUploader] Image loaded → Image Editor shown: {path}");
     }
 
-    // ===============================================================
-    // STEP 2 — Apply button: capture cropped image & activate 5 weapons
-    // ===============================================================
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 2  —  Apply button clicked inside Image Editor
+    // ═══════════════════════════════════════════════════════════════════════
 
-    public void ApplyImage() {
-        if (imageEditor != null) {
+    private void OnApplyClicked() {
+        if (imageEditor != null)
             imageEditor.RequestFinalTexture(OnTextureReady);
-        }
     }
 
     private void OnTextureReady(Texture2D editedTexture) {
         if (editedTexture == null) {
-            Debug.LogError("[BossFaceUploader] Capture returned null texture.");
+            Debug.LogError("[BossFaceUploader] Capture returned null.");
             return;
         }
 
-        if (currentFaceTexture != null) {
-            Destroy(currentFaceTexture);
-        }
-
+        // Update boss face texture
+        if (currentFaceTexture != null) Destroy(currentFaceTexture);
         currentFaceTexture = editedTexture;
 
-        // Apply texture to the boss face
-        if (faceRenderer != null) {
+        if (faceRenderer != null)
             faceRenderer.material.mainTexture = editedTexture;
-            Debug.Log("[BossFaceUploader] Boss face texture applied successfully!");
-        } else {
-            Debug.LogError("[BossFaceUploader] faceRenderer is not assigned!");
+
+        // Transition: Editor → Voice Menu
+        SetActive(uploadButton,      false);
+        SetActive(imageEditorPanel,  false);
+        SetActive(voiceMenuPanel,    false);   // BossVoiceManager.OpenVoiceMenu will show it
+        SetActive(weaponActionPanel, false);
+
+        Debug.Log("[BossFaceUploader] Texture applied → opening Voice Menu");
+
+        // Open voice menu; the callback fires when the player clicks "Ready & Start!"
+        BossVoiceManager vm = BossVoiceManager.Instance;
+        if (vm == null) {
+            Debug.LogError("[BossFaceUploader] BossVoiceManager.Instance is null! Creating one now.");
+            GameObject host = new GameObject("BossVoiceManager", typeof(BossVoiceManager));
+            vm = host.GetComponent<BossVoiceManager>();
+            vm.SetVoiceMenuPanel(voiceMenuPanel);
         }
 
-        // Hide editor panel
-        if (imageEditorPanel != null) {
-            imageEditorPanel.SetActive(false);
-        }
+        vm.OpenVoiceMenu(OnVoiceMenuComplete);
+    }
 
-        // Open Voice Reaction menu right after image editing completes
-        BossVoiceManager voiceManager = BossVoiceManager.Instance;
-        if (voiceManager == null) {
-            voiceManager = FindFirstObjectByType<BossVoiceManager>();
-            if (voiceManager == null) {
-                GameObject vmObj = new GameObject("BossVoiceManager", typeof(BossVoiceManager));
-                voiceManager = vmObj.GetComponent<BossVoiceManager>();
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 3  —  "Ready & Start!" clicked inside Voice Menu
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void OnVoiceMenuComplete() {
+        // Transition: Voice Menu → Weapon Action Panel
+        SetActive(uploadButton,      false);
+        SetActive(imageEditorPanel,  false);
+        SetActive(voiceMenuPanel,    false);
+        SetActive(weaponActionPanel, true);
+
+        if (weaponSelectionUI != null)
+            weaponSelectionUI.ShowWeaponPanel(true);
+
+        if (WeaponManager.Instance != null)
+            WeaponManager.Instance.SelectWeapon(WeaponType.Glove);
+
+        Debug.Log("[BossFaceUploader] Voice setup done → Weapons unlocked!");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private static void SetActive(GameObject go, bool active) {
+        if (go != null) go.SetActive(active);
+    }
+
+    /// <summary>Finds a GameObject by name even if it is inactive.</summary>
+    private static GameObject FindInactiveByName(string name) {
+        foreach (var rt in FindObjectsByType<RectTransform>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
+            if (rt.name == name) return rt.gameObject;
+        }
+        // Also search non-UI objects
+        foreach (var t in FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
+            if (t.name == name) return t.gameObject;
+        }
+        return null;
+    }
+
+    /// <summary>Finds a Button in panel by name and binds an action to it.</summary>
+    private static void BindBtn(GameObject panel, string[] names, UnityEngine.Events.UnityAction action) {
+        Button[] buttons = panel.GetComponentsInChildren<Button>(true);
+        foreach (var b in buttons) {
+            foreach (string n in names) {
+                if (b.name.Equals(n, System.StringComparison.OrdinalIgnoreCase) || b.name.Contains(n)) {
+                    b.onClick.RemoveListener(action);
+                    b.onClick.AddListener(action);
+                    return;
+                }
             }
         }
-
-        voiceManager.OpenVoiceMenu(() => {
-            // Activate the 5 weapon buttons for gameplay after voice menu is closed
-            if (weaponSelectionUI != null) {
-                weaponSelectionUI.ShowWeaponPanel(true);
-            }
-            Debug.Log("[BossFaceUploader] Voice setup complete! Weapons unlocked: Glove, Slap, Coffee, Chappal, Super!");
-        });
     }
 }

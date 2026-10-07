@@ -23,13 +23,45 @@ public class WeaponSelectionUI : MonoBehaviour {
 
     private void Start() {
         if (weaponPanel == null) {
-            Canvas mainCanvas = FindFirstObjectByType<Canvas>();
-            if (mainCanvas != null) {
-                BuildRuntimeUI(mainCanvas.transform);
+            string[] possibleNames = { "WeaponActionPanel", "WeaponUI", "BottonPannel", "WeaponPanel" };
+            foreach (string name in possibleNames) {
+                GameObject found = GameObject.Find(name);
+                if (found != null) {
+                    weaponPanel = found;
+                    break;
+                }
+            }
+
+            if (weaponPanel == null) {
+                Canvas mainCanvas = FindFirstObjectByType<Canvas>(FindObjectsInactive.Include);
+                if (mainCanvas != null) {
+                    BuildRuntimeUI(mainCanvas.transform);
+                }
             }
         }
+
+        AutoFindButtons();
         SetupButtons();
-        ShowWeaponPanel(false); // Initially hidden; activated when editing is done
+        ShowWeaponPanel(false); // Initially hidden; activated when voice menu completes
+    }
+
+    private void AutoFindButtons() {
+        if (weaponPanel == null) return;
+        if (gloveBtn == null) gloveBtn = FindBtn(weaponPanel, "Glove");
+        if (slapBtn == null) slapBtn = FindBtn(weaponPanel, "Slap");
+        if (coffeeBtn == null) coffeeBtn = FindBtn(weaponPanel, "Coffee");
+        if (chappalBtn == null) chappalBtn = FindBtn(weaponPanel, "Chappal");
+        if (superBtn == null) superBtn = FindBtn(weaponPanel, "Super");
+    }
+
+    private Button FindBtn(GameObject panel, string nameKey) {
+        Button[] btns = panel.GetComponentsInChildren<Button>(true);
+        foreach (var b in btns) {
+            if (b.name.IndexOf(nameKey, System.StringComparison.OrdinalIgnoreCase) >= 0) {
+                return b;
+            }
+        }
+        return null;
     }
 
     private void SetupButtons() {
